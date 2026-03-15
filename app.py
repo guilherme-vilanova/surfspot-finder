@@ -11,6 +11,8 @@ MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 CACHE_TTL_SECONDS = 600  # 10 minutes
+MAX_CLOSEST_BEACHES = 5
+
 marine_cache = {}
 forecast_cache = {}
 
@@ -232,7 +234,7 @@ def get_bulk_marine_conditions(beaches):
         "timezone": "auto",
     }
 
-    response = safe_get(MARINE_URL, params=params, timeout=30, retries=2)
+    response = safe_get(MARINE_URL, params=params, timeout=20, retries=2)
     data = response.json()
     items = normalize_bulk_response(data)
 
@@ -249,7 +251,7 @@ def get_bulk_marine_conditions(beaches):
     return results
 
 
-def get_bulk_forecast_conditions(beaches, chunk_size=8):
+def get_bulk_forecast_conditions(beaches, chunk_size=2):
     if not beaches:
         return {}
 
@@ -258,7 +260,9 @@ def get_bulk_forecast_conditions(beaches, chunk_size=8):
     for i in range(0, len(beaches), chunk_size):
         chunk = beaches[i:i + chunk_size]
 
-        cache_key = ("forecast_current", tuple(sorted((round(b["lat"], 4), round(b["lon"], 4)) for b in chunk)))
+        cache_key = ("forecast_current", tuple(sorted(
+            (round(b["lat"], 4), round(b["lon"], 4)) for b in chunk
+        )))
         cached = cache_get(forecast_cache, cache_key)
         if cached is not None:
             results.update(cached)
@@ -278,9 +282,9 @@ def get_bulk_forecast_conditions(beaches, chunk_size=8):
         success = False
         last_error = None
 
-        for attempt in range(3):
+        for attempt in range(2):
             try:
-                response = requests.get(FORECAST_URL, params=params, timeout=30)
+                response = requests.get(FORECAST_URL, params=params, timeout=12)
                 response.raise_for_status()
                 data = response.json()
                 items = normalize_bulk_response(data)
@@ -304,16 +308,18 @@ def get_bulk_forecast_conditions(beaches, chunk_size=8):
                 last_error = exc
                 status = exc.response.status_code if exc.response is not None else None
 
-                if status == 429:
-                    wait_seconds = 2 * (attempt + 1)
-                    print(f"Forecast current 429 on chunk {i // chunk_size + 1}, retrying in {wait_seconds}s...")
-                    time.sleep(wait_seconds)
+                if status == 429 and attempt == 0:
+                    print(f"Forecast current 429 on chunk {i // chunk_size + 1}, retrying in 1s...")
+                    time.sleep(1)
                 else:
                     break
 
             except requests.RequestException as exc:
                 last_error = exc
-                time.sleep(1.5 * (attempt + 1))
+                if attempt == 0:
+                    time.sleep(1)
+                else:
+                    break
 
         if not success:
             print(f"Bulk forecast current error on chunk {i // chunk_size + 1}: {last_error}")
@@ -350,6 +356,7 @@ def build_beach_rankings(municipality: str, max_distance_km: int, result_limit: 
             nearby_beaches.append(beach_copy)
 
     nearby_beaches.sort(key=lambda beach: (beach["distance_km"], beach["name"]))
+    nearby_beaches = nearby_beaches[:MAX_CLOSEST_BEACHES]
 
     if not nearby_beaches:
         return origin_data, []
@@ -361,7 +368,7 @@ def build_beach_rankings(municipality: str, max_distance_km: int, result_limit: 
         marine_data = {}
 
     try:
-        forecast_data = get_bulk_forecast_conditions(nearby_beaches, chunk_size=8)
+        forecast_data = get_bulk_forecast_conditions(nearby_beaches, chunk_size=2)
     except Exception as exc:
         print(f"Bulk forecast current error: {exc}")
         forecast_data = {}
