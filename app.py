@@ -18,14 +18,14 @@ forecast_cache = {}
 def safe_get(url, params, timeout=25, retries=2):
     last_error = None
 
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             response = requests.get(url, params=params, timeout=timeout)
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
             last_error = exc
-            time.sleep(1)
+            time.sleep(1 + attempt)
 
     raise last_error
 
@@ -216,7 +216,7 @@ def get_bulk_marine_conditions(beaches):
     if not beaches:
         return {}
 
-    cache_key = tuple(sorted((round(b["lat"], 4), round(b["lon"], 4)) for b in beaches))
+    cache_key = ("marine", tuple(sorted((round(b["lat"], 4), round(b["lon"], 4)) for b in beaches)))
     cached = cache_get(marine_cache, cache_key)
     if cached is not None:
         return cached
@@ -249,42 +249,84 @@ def get_bulk_marine_conditions(beaches):
     return results
 
 
-def get_bulk_forecast_conditions(beaches):
+def get_bulk_forecast_conditions(beaches, chunk_size=8):
     if not beaches:
         return {}
 
-    cache_key = tuple(sorted((round(b["lat"], 4), round(b["lon"], 4)) for b in beaches))
-    cached = cache_get(forecast_cache, cache_key)
-    if cached is not None:
-        return cached
-
-    latitudes = ",".join(str(beach["lat"]) for beach in beaches)
-    longitudes = ",".join(str(beach["lon"]) for beach in beaches)
-
-    params = {
-        "latitude": latitudes,
-        "longitude": longitudes,
-        "hourly": "wind_speed_10m,wind_direction_10m,temperature_2m,precipitation,weather_code",
-        "forecast_days": 1,
-        "timezone": "auto",
-    }
-
-    response = safe_get(FORECAST_URL, params=params, timeout=30, retries=2)
-    data = response.json()
-    items = normalize_bulk_response(data)
-
     results = {}
-    for beach, item in zip(beaches, items):
-        hourly = item.get("hourly", {})
-        results[beach["name"]] = {
-            "wind_speed": first_value(hourly, "wind_speed_10m"),
-            "wind_direction": first_value(hourly, "wind_direction_10m"),
-            "temperature_c": first_value(hourly, "temperature_2m"),
-            "precipitation": first_value(hourly, "precipitation"),
-            "weather_code": first_value(hourly, "weather_code"),
+
+    for i in range(0, len(beaches), chunk_size):
+        chunk = beaches[i:i + chunk_size]
+
+        cache_key = ("forecast_current", tuple(sorted((round(b["lat"], 4), round(b["lon"], 4)) for b in chunk)))
+        cached = cache_get(forecast_cache, cache_key)
+        if cached is not None:
+            results.update(cached)
+            continue
+
+        latitudes = ",".join(str(beach["lat"]) for beach in chunk)
+        longitudes = ",".join(str(beach["lon"]) for beach in chunk)
+
+        params = {
+            "latitude": latitudes,
+            "longitude": longitudes,
+            "current": "wind_speed_10m,wind_direction_10m,temperature_2m,precipitation,weather_code",
+            "timezone": "auto",
         }
 
-    cache_set(forecast_cache, cache_key, results)
+        chunk_results = {}
+        success = False
+        last_error = None
+
+        for attempt in range(3):
+            try:
+                response = requests.get(FORECAST_URL, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                items = normalize_bulk_response(data)
+
+                for beach, item in zip(chunk, items):
+                    current = item.get("current", {})
+                    chunk_results[beach["name"]] = {
+                        "wind_speed": current.get("wind_speed_10m"),
+                        "wind_direction": current.get("wind_direction_10m"),
+                        "temperature_c": current.get("temperature_2m"),
+                        "precipitation": current.get("precipitation"),
+                        "weather_code": current.get("weather_code"),
+                    }
+
+                cache_set(forecast_cache, cache_key, chunk_results)
+                results.update(chunk_results)
+                success = True
+                break
+
+            except requests.HTTPError as exc:
+                last_error = exc
+                status = exc.response.status_code if exc.response is not None else None
+
+                if status == 429:
+                    wait_seconds = 2 * (attempt + 1)
+                    print(f"Forecast current 429 on chunk {i // chunk_size + 1}, retrying in {wait_seconds}s...")
+                    time.sleep(wait_seconds)
+                else:
+                    break
+
+            except requests.RequestException as exc:
+                last_error = exc
+                time.sleep(1.5 * (attempt + 1))
+
+        if not success:
+            print(f"Bulk forecast current error on chunk {i // chunk_size + 1}: {last_error}")
+            for beach in chunk:
+                chunk_results[beach["name"]] = {
+                    "wind_speed": None,
+                    "wind_direction": None,
+                    "temperature_c": None,
+                    "precipitation": None,
+                    "weather_code": None,
+                }
+            results.update(chunk_results)
+
     return results
 
 
@@ -319,9 +361,9 @@ def build_beach_rankings(municipality: str, max_distance_km: int, result_limit: 
         marine_data = {}
 
     try:
-        forecast_data = get_bulk_forecast_conditions(nearby_beaches)
+        forecast_data = get_bulk_forecast_conditions(nearby_beaches, chunk_size=8)
     except Exception as exc:
-        print(f"Bulk forecast error: {exc}")
+        print(f"Bulk forecast current error: {exc}")
         forecast_data = {}
 
     results = []
