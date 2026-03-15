@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SurfSpot Finder</title>
+
+<style>
+body{
+  font-family: Arial, Helvetica, sans-serif;
+  background:#f4f6fa;
+  margin:40px;
+  color:#222;
+}
+
+h1{
+  margin-bottom:5px;
+}
+
+.subtitle{
+  color:#555;
+  margin-bottom:25px;
+}
+
+form{
+  background:white;
+  padding:20px;
+  border-radius:14px;
+  box-shadow:0 4px 14px rgba(0,0,0,0.08);
+  margin-bottom:25px;
+  display:grid;
+  grid-template-columns: repeat(auto-fit,minmax(200px,1fr));
+  gap:15px;
+}
+
+label{
+  font-weight:600;
+  font-size:14px;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+select{
+  padding:10px;
+  border-radius:10px;
+  border:1px solid #d6dce6;
+  background:#fff;
+}
+
+button{
+  background:#2563eb;
+  border:none;
+  color:white;
+  padding:12px;
+  border-radius:10px;
+  cursor:pointer;
+  font-weight:bold;
+  box-shadow:0 2px 8px rgba(37,99,235,0.25);
+}
+
+button:hover{
+  background:#1d4ed8;
+}
+
+.summary{
+  margin-bottom:20px;
+  font-size:15px;
+  color:#444;
+}
+
+.top{
+  background:linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  padding:20px;
+  border-radius:16px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.08);
+  border-left:8px solid #22c55e;
+  margin-bottom:25px;
+}
+
+.top h3{
+  margin-top:0;
+  margin-bottom:10px;
+}
+
+.top-main{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+  flex-wrap:wrap;
+}
+
+.top-left{
+  flex:1;
+  min-width:240px;
+}
+
+.top-beach{
+  font-size:24px;
+  font-weight:700;
+  margin-bottom:8px;
+}
+
+.top-meta{
+  color:#475569;
+  font-size:14px;
+  line-height:1.5;
+}
+
+.top-notes{
+  margin-top:12px;
+  color:#5b6472;
+  font-size:13px;
+}
+
+.top-score{
+  min-width:120px;
+  text-align:center;
+  background:#eef6ff;
+  border-radius:14px;
+  padding:14px 12px;
+  box-shadow: inset 0 0 0 1px #dbeafe;
+}
+
+.top-score-number{
+  font-size:28px;
+  font-weight:800;
+  color:#1d4ed8;
+  line-height:1;
+}
+
+.top-score-label{
+  margin-top:6px;
+  font-size:12px;
+  color:#475569;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  background:white;
+  box-shadow:0 4px 14px rgba(0,0,0,0.08);
+  border-radius:14px;
+  overflow:hidden;
+}
+
+th{
+  background:#111827;
+  color:white;
+  padding:12px;
+  text-align:left;
+  font-size:14px;
+}
+
+td{
+  padding:12px;
+  border-bottom:1px solid #eee;
+  font-size:14px;
+}
+
+tr:hover{
+  background:#f8fbff;
+}
+
+tr.rank-1{
+  background:#f0fdf4;
+}
+
+tr.rank-2{
+  background:#fffef2;
+}
+
+tr.rank-3{
+  background:#fff7ed;
+}
+
+.pill{
+  padding:4px 10px;
+  border-radius:999px;
+  font-weight:bold;
+  font-size:12px;
+  display:inline-block;
+}
+
+.green{background:#bbf7d0;}
+.yellow{background:#fef08a;}
+.orange{background:#fed7aa;}
+.red{background:#fecaca;}
+
+.small{
+  color:#666;
+  font-size:12px;
+}
+
+.score-tooltip{
+  position:relative;
+  display:inline-block;
+  font-weight:bold;
+  cursor:help;
+  border-bottom:1px dashed #94a3b8;
+}
+
+.score-tooltip .tooltip-box{
+  visibility:hidden;
+  opacity:0;
+  transition:opacity 0.15s ease-in-out;
+  position:absolute;
+  bottom:130%;
+  left:50%;
+  transform:translateX(-50%);
+  background:#111827;
+  color:white;
+  padding:8px 10px;
+  border-radius:8px;
+  font-size:12px;
+  white-space:nowrap;
+  z-index:10;
+  box-shadow:0 8px 20px rgba(0,0,0,0.2);
+}
+
+.score-tooltip:hover .tooltip-box{
+  visibility:visible;
+  opacity:1;
+}
+
+.beach-name{
+  font-weight:700;
+}
+
+.rank-badge{
+  display:inline-block;
+  min-width:26px;
+  text-align:center;
+  padding:4px 8px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:700;
+  margin-right:8px;
+  color:#111827;
+  background:#e5e7eb;
+}
+</style>
+</head>
+
+<body>
+
+<h1>SurfSpot Finder</h1>
+<div class="subtitle">
+Find the best surf beaches based on waves, wind and weather conditions.
+</div>
+
+<form method="POST">
+
+<label>
+Municipality
+<select name="municipality">
+{% for city in municipalities %}
+<option value="{{ city }}" {% if city == municipality %}selected{% endif %}>{{ city }}</option>
+{% endfor %}
+</select>
+</label>
+
+<label>
+Max radius
+<select name="max_distance_km">
+<option value="30" {% if max_distance_km == 30 %}selected{% endif %}>30 km</option>
+<option value="50" {% if max_distance_km == 50 %}selected{% endif %}>50 km</option>
+<option value="80" {% if max_distance_km == 80 %}selected{% endif %}>80 km</option>
+</select>
+</label>
+
+<label>
+Results
+<select name="result_limit">
+<option value="5" {% if result_limit == 5 %}selected{% endif %}>Top 5</option>
+<option value="10" {% if result_limit == 10 %}selected{% endif %}>Top 10</option>
+</select>
+</label>
+
+<label>
+Surfer level
+<select name="skill_level">
+<option value="beginner" {% if skill_level == "beginner" %}selected{% endif %}>Beginner</option>
+<option value="advanced" {% if skill_level == "advanced" %}selected{% endif %}>Advanced</option>
+</select>
+</label>
+
+<div>
+<button type="submit">Find beaches</button>
+</div>
+
+</form>
+
+{% if origin %}
+<div class="summary">
+Selected municipality: <strong>{{ origin.name }}</strong>
+· Radius: <strong>{{ max_distance_km }} km</strong>
+· Profile: <strong>{{ skill_level }}</strong>
+</div>
+{% endif %}
+
+{% if beaches and beaches|length > 0 %}
+
+<div class="top">
+  <h3>
+    {% if skill_level == "beginner" %}
+      Best beginner-friendly spot right now
+    {% else %}
+      Best advanced surf option right now
+    {% endif %}
+  </h3>
+
+  <div class="top-main">
+    <div class="top-left">
+      <div class="top-beach">{{ beaches[0].name }} <span class="pill {{ beaches[0].condition_color }}">{{ beaches[0].condition_label }}</span></div>
+      <div class="top-meta">
+        {{ beaches[0].distance_km }} km away ·
+        Wave {{ beaches[0].wave_height }} m ·
+        Period {{ beaches[0].wave_period }} s ·
+        Wind {{ beaches[0].wind_speed }} km/h {{ beaches[0].wind_direction_visual }} ·
+        {{ beaches[0].weather_label }} ·
+        {{ beaches[0].temperature_c }} °C
+      </div>
+      <div class="top-notes">{{ beaches[0].notes }}</div>
+    </div>
+
+    <div class="top-score">
+      <div class="top-score-number">{{ beaches[0].score }}</div>
+      <div class="top-score-label">Surf Score</div>
+    </div>
+  </div>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>Beach</th>
+<th>Distance</th>
+<th>Wave</th>
+<th>Wind</th>
+<th>Weather</th>
+<th>Best wind</th>
+<th>Score</th>
+<th>Quality</th>
+</tr>
+</thead>
+
+<tbody>
+{% for beach in beaches %}
+<tr class="{% if loop.index == 1 %}rank-1{% elif loop.index == 2 %}rank-2{% elif loop.index == 3 %}rank-3{% endif %}">
+<td>
+  <span class="rank-badge">#{{ loop.index }}</span>
+  <span class="beach-name">{{ beach.name }}</span><br>
+  <span class="small">{{ beach.region }}</span>
+</td>
+
+<td>{{ beach.distance_km }} km</td>
+
+<td>
+  {{ beach.wave_height }} m<br>
+  {{ beach.wave_period }} s<br>
+  {{ beach.wave_direction_visual }}
+</td>
+
+<td>
+  {{ beach.wind_speed }} km/h<br>
+  {{ beach.wind_direction_visual }}
+</td>
+
+<td>
+  {{ beach.weather_label }}<br>
+  {{ beach.temperature_c }} °C
+</td>
+
+<td>{{ beach.best_wind_label }}</td>
+
+<td>
+  <span class="score-tooltip">
+    {{ beach.score }}
+    <span class="tooltip-box">
+      Wave Score: {{ beach.wave_score }}<br>
+      Wind Score: {{ beach.wind_score }}
+    </span>
+  </span>
+</td>
+
+<td>
+  <span class="pill {{ beach.condition_color }}">
+    {{ beach.condition_label }}
+  </span>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+
+{% elif origin %}
+<p>No beaches found for this radius.</p>
+{% endif %}
+
+</body>
+</html>
