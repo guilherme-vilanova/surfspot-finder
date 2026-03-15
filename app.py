@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request
 import requests
 import time
+import os
 from math import radians, sin, cos, sqrt, atan2
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from beaches_sc import BEACHES, MUNICIPALITIES
@@ -377,30 +378,32 @@ def build_beach_rankings(municipality: str, max_distance_km: int, result_limit: 
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    municipality = "Florianopolis"
+    municipality = ""
     max_distance_km = 80
     result_limit = 5
     skill_level = "beginner"
 
     origin = None
     beaches = []
+    has_searched = False
 
     if request.method == "POST":
-        municipality = request.form.get("municipality", "Florianopolis")
+        has_searched = True
+        municipality = request.form.get("municipality", "")
         max_distance_km = int(request.form.get("max_distance_km", 80))
         result_limit = int(request.form.get("result_limit", 5))
         skill_level = request.form.get("skill_level", "beginner")
 
-    try:
-        origin, beaches = build_beach_rankings(
-            municipality=municipality,
-            max_distance_km=max_distance_km,
-            result_limit=result_limit,
-            skill_level=skill_level,
-        )
-    except Exception as exc:
-        print(f"Application error: {exc}")
-        origin, beaches = None, []
+        try:
+            origin, beaches = build_beach_rankings(
+                municipality=municipality,
+                max_distance_km=max_distance_km,
+                result_limit=result_limit,
+                skill_level=skill_level,
+            )
+        except Exception as exc:
+            print(f"Application error: {exc}")
+            origin, beaches = None, []
 
     return render_template(
         "index.html",
@@ -411,6 +414,7 @@ def home():
         skill_level=skill_level,
         origin=origin,
         beaches=beaches,
+        has_searched=has_searched,
     )
 
 

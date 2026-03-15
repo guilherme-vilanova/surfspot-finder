@@ -241,6 +241,15 @@ tr.rank-3{
   color:#111827;
   background:#e5e7eb;
 }
+
+.empty-state{
+  background:white;
+  border-radius:14px;
+  box-shadow:0 4px 14px rgba(0,0,0,0.08);
+  padding:28px;
+  color:#475569;
+  text-align:center;
+}
 </style>
 </head>
 
@@ -254,11 +263,12 @@ Find the best surf beaches based on waves, wind and weather conditions.
 <form method="POST">
 
 <label>
-Municipality
-<select name="municipality">
-{% for city in municipalities %}
-<option value="{{ city }}" {% if city == municipality %}selected{% endif %}>{{ city }}</option>
-{% endfor %}
+Location
+<select name="municipality" required>
+  <option value="" disabled {% if not municipality %}selected{% endif %}>Select a location</option>
+  {% for city in municipalities %}
+  <option value="{{ city }}" {% if city == municipality %}selected{% endif %}>{{ city }}</option>
+  {% endfor %}
 </select>
 </label>
 
@@ -293,15 +303,20 @@ Surfer level
 
 </form>
 
-{% if origin %}
+{% if has_searched and origin %}
 <div class="summary">
-Selected municipality: <strong>{{ origin.name }}</strong>
+Selected location: <strong>{{ origin.name }}</strong>
 · Radius: <strong>{{ max_distance_km }} km</strong>
 · Profile: <strong>{{ skill_level }}</strong>
 </div>
 {% endif %}
 
-{% if beaches and beaches|length > 0 %}
+{% if not has_searched %}
+<div class="empty-state">
+  <h3 style="margin-top:0;">Start your surf search</h3>
+  <p>Select a location, choose your radius and surfer level, then click <strong>Find beaches</strong>.</p>
+</div>
+{% elif beaches and beaches|length > 0 %}
 
 <div class="top">
   <h3>
@@ -396,7 +411,7 @@ Selected municipality: <strong>{{ origin.name }}</strong>
 </tbody>
 </table>
 
-{% elif origin %}
+{% elif has_searched %}
 <p>No beaches found for this radius.</p>
 {% endif %}
 
