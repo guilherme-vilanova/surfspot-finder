@@ -123,6 +123,80 @@ a{
   font-size:15px;
 }
 
+.loading-progress{
+  position:relative;
+  width:100%;
+  height:10px;
+  margin:18px 0 0;
+  border-radius:999px;
+  overflow:hidden;
+  background:rgba(48,106,178,0.12);
+}
+
+.loading-progress-bar{
+  position:absolute;
+  inset:0 auto 0 0;
+  width:12%;
+  border-radius:999px;
+  background:linear-gradient(90deg, var(--accent), #ffbc56 55%, var(--ocean-500));
+  box-shadow:0 8px 18px rgba(255,154,0,0.22);
+  transition:width 0.45s ease;
+}
+
+.loading-steps{
+  margin:22px 0 0;
+  padding:0;
+  list-style:none;
+  display:grid;
+  gap:10px;
+  text-align:left;
+}
+
+.loading-step{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border-radius:16px;
+  color:var(--muted);
+  background:rgba(48,106,178,0.08);
+  border:1px solid rgba(48,106,178,0.10);
+  transition:all 0.2s ease;
+}
+
+.loading-step-dot{
+  width:12px;
+  height:12px;
+  border-radius:50%;
+  flex:0 0 12px;
+  background:rgba(48,106,178,0.18);
+  box-shadow:0 0 0 6px rgba(48,106,178,0.08);
+  transition:all 0.2s ease;
+}
+
+.loading-step.active{
+  color:var(--ocean-900);
+  background:rgba(255,154,0,0.10);
+  border-color:rgba(255,154,0,0.22);
+  transform:translateY(-1px);
+}
+
+.loading-step.active .loading-step-dot{
+  background:var(--accent);
+  box-shadow:0 0 0 6px rgba(255,154,0,0.14);
+}
+
+.loading-step.done{
+  color:var(--ocean-700);
+  background:rgba(15,159,110,0.10);
+  border-color:rgba(15,159,110,0.16);
+}
+
+.loading-step.done .loading-step-dot{
+  background:var(--success);
+  box-shadow:0 0 0 6px rgba(15,159,110,0.10);
+}
+
 @keyframes spin{
   to{
     transform:rotate(360deg);
@@ -1347,6 +1421,27 @@ tr:hover{
     <div class="loading-spinner" aria-hidden="true"></div>
     <h2 class="loading-title">Loading Forecast</h2>
     <p class="loading-copy" id="loading-message">Finding nearby beaches and checking waves, wind and weather.</p>
+    <div class="loading-progress" aria-hidden="true">
+      <div class="loading-progress-bar" id="loading-progress-bar"></div>
+    </div>
+    <ul class="loading-steps" id="loading-steps">
+      <li class="loading-step" data-step>
+        <span class="loading-step-dot" aria-hidden="true"></span>
+        <span>Checking your selected region</span>
+      </li>
+      <li class="loading-step" data-step>
+        <span class="loading-step-dot" aria-hidden="true"></span>
+        <span>Finding nearby beaches</span>
+      </li>
+      <li class="loading-step" data-step>
+        <span class="loading-step-dot" aria-hidden="true"></span>
+        <span>Reading waves and wind</span>
+      </li>
+      <li class="loading-step" data-step>
+        <span class="loading-step-dot" aria-hidden="true"></span>
+        <span>Applying the surf ranking</span>
+      </li>
+    </ul>
   </div>
 </div>
 
@@ -1580,13 +1675,6 @@ tr:hover{
             referrerpolicy="no-referrer-when-downgrade"
             src="{{ winner_map_embed_url }}">
           </iframe>
-          <a
-            class="map-link-btn"
-            href="{{ winner_google_maps_url }}"
-            target="_blank"
-            rel="noopener noreferrer">
-            Open in Google Maps
-          </a>
         </div>
         <p class="map-caption">
           Zoomed out to show where <strong>{{ beaches[0].name }}</strong> sits along the coast.
@@ -1693,7 +1781,7 @@ tr:hover{
     {% elif has_searched %}
     <div class="empty-state">
       <h3>No Beaches Found</h3>
-      <p>Try the 50 km radius, or search from another location.</p>
+      <p>Try the 30 km or 50 km radius, or search from another location.</p>
     </div>
     {% endif %}
   </div>
@@ -1710,6 +1798,8 @@ const useMyLocationButton = document.getElementById("use-my-location-btn");
 const statusText = document.getElementById("location-status");
 const loadingScreen = document.getElementById("loading-screen");
 const loadingMessage = document.getElementById("loading-message");
+const loadingProgressBar = document.getElementById("loading-progress-bar");
+const loadingSteps = Array.from(document.querySelectorAll("[data-step]"));
 const primarySubmitButton = form.querySelector('button[type="submit"]');
 const metricUnitsButton = document.getElementById("metric-units-btn");
 const usUnitsButton = document.getElementById("us-units-btn");
@@ -1717,8 +1807,31 @@ const skillLevelInfoButton = document.getElementById("skill-level-info-btn");
 const skillLevelHelp = document.getElementById("skill-level-help");
 const autocompletePanel = document.getElementById("location-autocomplete");
 const searchSuggestions = {{ search_suggestions|tojson }};
+const lastSearchFingerprint = {{ last_search_fingerprint|tojson }};
+const lastCacheMatchFingerprint = {{ last_cache_match_fingerprint|tojson }};
 let activeSuggestionIndex = -1;
 let filteredSuggestions = [];
+let loadingStepTimer = null;
+let loadingShowTimer = null;
+let loadingShownAt = 0;
+let loadingHideTimer = null;
+const LOADING_SHOW_DELAY_MS = 220;
+const MIN_LOADING_VISIBLE_MS = 900;
+
+const loadingSequences = {
+  manual: [
+    "Checking your selected region and preparing the search.",
+    "Finding nearby beaches in the selected area.",
+    "Reading waves, wind and weather conditions.",
+    "Applying the ranking and preparing your top spots.",
+  ],
+  location: [
+    "Using your current location and checking the surrounding area.",
+    "Finding nearby beaches around you.",
+    "Reading waves, wind and weather conditions.",
+    "Applying the ranking and preparing your top spots.",
+  ],
+};
 
 function clearResolvedOrigin() {
   originLatInput.value = "";
@@ -1730,6 +1843,30 @@ function clearResolvedOrigin() {
 function setStatus(message, isError = false) {
   statusText.textContent = message;
   statusText.style.color = isError ? "var(--danger)" : "var(--muted)";
+}
+
+function buildCurrentSearchFingerprint() {
+  return [
+    locationInput.value.trim().toLowerCase(),
+    form.elements.max_distance_km.value,
+    form.elements.result_limit.value,
+    form.elements.skill_level.value.toLowerCase(),
+    originLatInput.value.trim(),
+    originLonInput.value.trim(),
+    originSourceInput.value.trim().toLowerCase(),
+    resolvedLabelInput.value.trim().toLowerCase(),
+  ].join("|");
+}
+
+function buildCurrentCacheMatchFingerprint() {
+  return [
+    locationInput.value.trim().toLowerCase(),
+    form.elements.max_distance_km.value,
+    originLatInput.value.trim(),
+    originLonInput.value.trim(),
+    originSourceInput.value.trim().toLowerCase(),
+    resolvedLabelInput.value.trim().toLowerCase(),
+  ].join("|");
 }
 
 function roundToOne(value) {
@@ -1905,15 +2042,95 @@ usUnitsButton.addEventListener("click", () => {
 });
 
 function showLoadingScreen(message) {
-  loadingMessage.textContent = message || "Finding nearby beaches and checking waves, wind and weather.";
+  const sequence = loadingSequences[message] || loadingSequences.manual;
+  if (loadingStepTimer) {
+    window.clearInterval(loadingStepTimer);
+  }
+  if (loadingShowTimer) {
+    window.clearTimeout(loadingShowTimer);
+    loadingShowTimer = null;
+  }
+  if (loadingHideTimer) {
+    window.clearTimeout(loadingHideTimer);
+    loadingHideTimer = null;
+  }
+
+  let currentStep = 0;
+  loadingMessage.textContent = sequence[0];
+  loadingProgressBar.style.width = "18%";
+  loadingSteps.forEach((step, index) => {
+    step.classList.toggle("active", index === 0);
+    step.classList.remove("done");
+  });
+
   loadingScreen.classList.add("visible");
   loadingScreen.setAttribute("aria-hidden", "false");
   document.body.classList.add("loading");
   primarySubmitButton.disabled = true;
   useMyLocationButton.disabled = true;
+  loadingShownAt = Date.now();
+
+  loadingStepTimer = window.setInterval(() => {
+    currentStep = Math.min(currentStep + 1, sequence.length - 1);
+    loadingMessage.textContent = sequence[currentStep];
+    const progress = Math.min(92, 18 + (currentStep / (sequence.length - 1 || 1)) * 74);
+    loadingProgressBar.style.width = `${progress}%`;
+
+    loadingSteps.forEach((step, index) => {
+      step.classList.toggle("active", index === currentStep);
+      step.classList.toggle("done", index < currentStep);
+    });
+
+    if (currentStep === sequence.length - 1) {
+      window.clearInterval(loadingStepTimer);
+      loadingStepTimer = null;
+    }
+  }, 1100);
+}
+
+function requestLoadingScreen(message) {
+  if (loadingShowTimer) {
+    window.clearTimeout(loadingShowTimer);
+  }
+
+  loadingShowTimer = window.setTimeout(() => {
+    loadingShowTimer = null;
+    showLoadingScreen(message);
+  }, LOADING_SHOW_DELAY_MS);
 }
 
 function hideLoadingScreen() {
+  if (loadingShowTimer) {
+    window.clearTimeout(loadingShowTimer);
+    loadingShowTimer = null;
+  }
+
+  if (!loadingScreen.classList.contains("visible")) {
+    return;
+  }
+
+  const elapsed = Date.now() - loadingShownAt;
+  if (elapsed < MIN_LOADING_VISIBLE_MS) {
+    if (loadingHideTimer) {
+      window.clearTimeout(loadingHideTimer);
+    }
+    loadingHideTimer = window.setTimeout(hideLoadingScreen, MIN_LOADING_VISIBLE_MS - elapsed);
+    return;
+  }
+
+  if (loadingStepTimer) {
+    window.clearInterval(loadingStepTimer);
+    loadingStepTimer = null;
+  }
+  if (loadingHideTimer) {
+    window.clearTimeout(loadingHideTimer);
+    loadingHideTimer = null;
+  }
+  loadingMessage.textContent = loadingSequences.manual[0];
+  loadingProgressBar.style.width = "12%";
+  loadingSteps.forEach((step) => {
+    step.classList.remove("active", "done");
+  });
   loadingScreen.classList.remove("visible");
   loadingScreen.setAttribute("aria-hidden", "true");
   document.body.classList.remove("loading");
@@ -1940,7 +2157,13 @@ async function reverseGeocode(lat, lon) {
 }
 
 form.addEventListener("submit", () => {
-  showLoadingScreen("Finding nearby beaches and checking waves, wind and weather.");
+  if (lastSearchFingerprint && buildCurrentSearchFingerprint() === lastSearchFingerprint) {
+    return;
+  }
+  if (lastCacheMatchFingerprint && buildCurrentCacheMatchFingerprint() === lastCacheMatchFingerprint) {
+    return;
+  }
+  requestLoadingScreen("manual");
 });
 
 useMyLocationButton.addEventListener("click", () => {
@@ -1965,7 +2188,7 @@ useMyLocationButton.addEventListener("click", () => {
       locationInput.value = resolved.formatted_address;
 
       setStatus("Location found. Loading beaches...");
-      showLoadingScreen("Using your current location and loading the best nearby surf options.");
+      requestLoadingScreen("location");
       form.submit();
     } catch (error) {
       setStatus(error.message, true);

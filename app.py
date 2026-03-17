@@ -35,7 +35,7 @@ CACHE_TTL_SECONDS = 600
 SEARCH_CACHE_TTL = 600
 MIN_BEACHES_TO_EVALUATE = 12
 MAX_BEACHES_TO_EVALUATE = 18
-DEFAULT_RADIUS_KM = 50
+DEFAULT_RADIUS_KM = 30
 RADIUS_EXPANSION_STEPS = ()
 LOCAL_DISCOVERY_SUFFICIENT_RESULTS = 6
 BEACH_MAP_CACHE_NAMESPACE = "beach_map_v1"
@@ -500,6 +500,50 @@ def build_coordinate_label(lat, lon):
     return f"Current location ({lat:.4f}, {lon:.4f})"
 
 
+def build_search_fingerprint(
+    location_query,
+    max_distance_km,
+    result_limit,
+    skill_level,
+    origin_lat,
+    origin_lon,
+    origin_source,
+    resolved_location_label,
+):
+    return "|".join(
+        [
+            (location_query or "").strip().casefold(),
+            str(max_distance_km),
+            str(result_limit),
+            (skill_level or "").strip().casefold(),
+            (origin_lat or "").strip(),
+            (origin_lon or "").strip(),
+            (origin_source or "").strip().casefold(),
+            (resolved_location_label or "").strip().casefold(),
+        ]
+    )
+
+
+def build_cache_match_fingerprint(
+    location_query,
+    max_distance_km,
+    origin_lat,
+    origin_lon,
+    origin_source,
+    resolved_location_label,
+):
+    return "|".join(
+        [
+            (location_query or "").strip().casefold(),
+            str(max_distance_km),
+            (origin_lat or "").strip(),
+            (origin_lon or "").strip(),
+            (origin_source or "").strip().casefold(),
+            (resolved_location_label or "").strip().casefold(),
+        ]
+    )
+
+
 def build_beach_map_query(beach):
     region = (beach.get("region") or "").strip()
     state = STATE_BY_REGION.get(beach.get("region"), "")
@@ -772,6 +816,8 @@ def home():
     has_searched = False
     winner_map_embed_url = None
     winner_google_maps_url = None
+    last_search_fingerprint = ""
+    last_cache_match_fingerprint = ""
 
     if request.method == "POST":
         has_searched = True
@@ -810,6 +856,24 @@ def home():
         beaches[0] = resolve_beach_map_target(beaches[0])
         winner_map_embed_url = build_beach_map_embed_url(beaches[0])
         winner_google_maps_url = build_beach_google_maps_url(beaches[0])
+        last_search_fingerprint = build_search_fingerprint(
+            location_query=location_query,
+            max_distance_km=max_distance_km,
+            result_limit=result_limit,
+            skill_level=skill_level,
+            origin_lat=origin_lat,
+            origin_lon=origin_lon,
+            origin_source=origin_source,
+            resolved_location_label=resolved_location_label,
+        )
+        last_cache_match_fingerprint = build_cache_match_fingerprint(
+            location_query=location_query,
+            max_distance_km=max_distance_km,
+            origin_lat=origin_lat,
+            origin_lon=origin_lon,
+            origin_source=origin_source,
+            resolved_location_label=resolved_location_label,
+        )
 
     return render_template(
         "index.html",
@@ -829,6 +893,8 @@ def home():
         search_suggestions=SEARCH_SUGGESTIONS,
         winner_map_embed_url=winner_map_embed_url,
         winner_google_maps_url=winner_google_maps_url,
+        last_search_fingerprint=last_search_fingerprint,
+        last_cache_match_fingerprint=last_cache_match_fingerprint,
     )
 
 
