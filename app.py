@@ -4,6 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import atan2, cos, radians, sin, sqrt
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import requests
 
@@ -13,12 +14,11 @@ except ImportError:  # pragma: no cover - optional local convenience dependency
     def load_dotenv(*args, **kwargs):
         return False
 
-from beach_source import BeachDiscoveryError, discover_beaches
-from beaches_rs import BEACHES_RS
-from beaches_sc import BEACHES, MUNICIPALITIES
 from env_loader import load_local_env
+from mcp_server.config import get_google_maps_api_key
 from mcp_server.location_service import GoogleLocationService, LocationServiceError
 from persistent_cache import PersistentTTLCache
+from surf_metadata import canonical_beach_name
 
 BASE_DIR = Path(__file__).resolve().parent
 if not load_dotenv(BASE_DIR / ".env"):
@@ -31,11 +31,17 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 CACHE_TTL_SECONDS = 600
 SEARCH_CACHE_TTL = 600
+HTTP_RETRIES = 3
+MARINE_TIMEOUT_SECONDS = 12
+FORECAST_TIMEOUT_SECONDS = 10
+MIN_RADIUS_KM = 30
+MAX_RADIUS_KM = 50
 MIN_BEACHES_TO_EVALUATE = 12
 MAX_BEACHES_TO_EVALUATE = 18
-DEFAULT_RADIUS_KM = 160
-RADIUS_EXPANSION_STEPS = (160, 220)
-LOCAL_DISCOVERY_SUFFICIENT_RESULTS = 6
+DEFAULT_RADIUS_KM = 50
+RADIUS_EXPANSION_STEPS = ()
+SEARCH_CACHE_NAMESPACE = "search_v2"
+BEACH_DISCOVERY_CACHE_NAMESPACE = "beach_discovery_v2"
 
 marine_cache = {}
 forecast_cache = {}
@@ -44,75 +50,9 @@ beach_discovery_cache = {}
 disk_cache = PersistentTTLCache(BASE_DIR / ".cache" / "surfspot_cache.json")
 
 location_service = GoogleLocationService.from_env()
-ALL_FALLBACK_BEACHES = [*BEACHES, *BEACHES_RS]
-BRAZIL_LABEL = "Brazil"
-STATE_BY_REGION = {
-    "Florianopolis": "Santa Catarina",
-    "Garopaba": "Santa Catarina",
-    "Imbituba": "Santa Catarina",
-    "Laguna": "Santa Catarina",
-    "Balneario Camboriu": "Santa Catarina",
-    "Itajai": "Santa Catarina",
-    "Governador Celso Ramos": "Santa Catarina",
-    "Jaguaruna": "Santa Catarina",
-    "Tramandai": "Rio Grande do Sul",
-    "Imbe": "Rio Grande do Sul",
-    "Xangri-la": "Rio Grande do Sul",
-    "Capao da Canoa": "Rio Grande do Sul",
-    "Torres": "Rio Grande do Sul",
-    "Cidreira": "Rio Grande do Sul",
-    "Balneario Pinhal": "Rio Grande do Sul",
-}
-EXTRA_LOCATION_SUGGESTIONS = [
-    {"value": "Porto Alegre", "label": "Porto Alegre, Rio Grande do Sul, Brazil", "meta": "City"},
-]
 
 
-def build_search_suggestions():
-    suggestions = {}
-
-    def add_suggestion(value, label, meta):
-        key = value.casefold()
-        if not value or key in suggestions:
-            return
-
-        suggestions[key] = {
-            "value": value,
-            "label": label,
-            "meta": meta,
-        }
-
-    for item in EXTRA_LOCATION_SUGGESTIONS:
-        add_suggestion(item["value"], item["label"], item["meta"])
-
-    for municipality in MUNICIPALITIES:
-        add_suggestion(
-            municipality,
-            f"{municipality}, Santa Catarina, {BRAZIL_LABEL}",
-            "City",
-        )
-
-    for beach in ALL_FALLBACK_BEACHES:
-        region = beach["region"]
-        state = STATE_BY_REGION.get(region, "Brazil")
-        add_suggestion(
-            beach["name"],
-            f"{beach['name']}, {region}, {state}, {BRAZIL_LABEL}",
-            "Beach",
-        )
-        add_suggestion(
-            region,
-            f"{region}, {state}, {BRAZIL_LABEL}",
-            "Region",
-        )
-
-    return sorted(suggestions.values(), key=lambda item: item["label"])
-
-
-SEARCH_SUGGESTIONS = build_search_suggestions()
-
-
-def safe_get(url, params, timeout=25, retries=2):
+def safe_get(url, params, timeout=10, retries=HTTP_RETRIES):
     last_error = None
 
     for _ in range(retries):
@@ -120,6 +60,8 @@ def safe_get(url, params, timeout=25, retries=2):
             response = requests.get(url, params=params, timeout=timeout)
             response.raise_for_status()
             return response
+        except requests.Timeout as exc:
+            last_error = exc
         except requests.RequestException as exc:
             last_error = exc
 
@@ -166,19 +108,19 @@ def layered_cache_set(cache_name, cache_dict, key, value, ttl=CACHE_TTL_SECONDS)
 
 
 def search_cache_get(key):
-    return layered_cache_get("search", search_cache, key)
+    return layered_cache_get(SEARCH_CACHE_NAMESPACE, search_cache, key)
 
 
 def search_cache_set(key, value):
-    layered_cache_set("search", search_cache, key, value, SEARCH_CACHE_TTL)
+    layered_cache_set(SEARCH_CACHE_NAMESPACE, search_cache, key, value, SEARCH_CACHE_TTL)
 
 
 def beach_discovery_cache_get(key):
-    return layered_cache_get("beach_discovery", beach_discovery_cache, key)
+    return layered_cache_get(BEACH_DISCOVERY_CACHE_NAMESPACE, beach_discovery_cache, key)
 
 
 def beach_discovery_cache_set(key, value):
-    layered_cache_set("beach_discovery", beach_discovery_cache, key, value, SEARCH_CACHE_TTL)
+    layered_cache_set(BEACH_DISCOVERY_CACHE_NAMESPACE, beach_discovery_cache, key, value, SEARCH_CACHE_TTL)
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -212,6 +154,10 @@ def has_surf_marine_signal(marine):
     return False
 
 
+def is_dynamic_beach_source(source):
+    return source == "google_places"
+
+
 def get_marine_conditions(lat, lon):
     cache_key = get_cache_key(lat, lon)
     cached = layered_cache_get("marine", marine_cache, cache_key)
@@ -226,7 +172,7 @@ def get_marine_conditions(lat, lon):
         "timezone": "auto",
     }
 
-    response = safe_get(MARINE_URL, params=params, timeout=25, retries=2)
+    response = safe_get(MARINE_URL, params=params, timeout=MARINE_TIMEOUT_SECONDS, retries=HTTP_RETRIES)
     data = response.json()
     hourly = data.get("hourly", {})
 
@@ -254,7 +200,12 @@ def get_forecast_conditions(lat, lon):
         "timezone": "auto",
     }
 
-    response = safe_get(FORECAST_URL, params=params, timeout=25, retries=2)
+    response = safe_get(
+        FORECAST_URL,
+        params=params,
+        timeout=FORECAST_TIMEOUT_SECONDS,
+        retries=HTTP_RETRIES,
+    )
     data = response.json()
     hourly = data.get("hourly", {})
 
@@ -337,22 +288,38 @@ def wave_quality_score(wave_height, wave_period, skill_level):
     return score
 
 
+def swell_quality_score(wave_direction, preferred_directions):
+    if wave_direction is None or not preferred_directions:
+        return 0
+
+    nearest_diff = min(angle_diff(wave_direction, direction) for direction in preferred_directions)
+
+    if nearest_diff <= 20:
+        return 3
+    if nearest_diff <= 45:
+        return 2
+    if nearest_diff <= 70:
+        return 1
+
+    return 0
+
+
 def classify_condition(score):
-    if score >= 9:
+    if score >= 11:
         return "Excellent"
-    if score >= 6:
+    if score >= 7:
         return "Good"
-    if score >= 3:
+    if score >= 4:
         return "Fair"
     return "Poor"
 
 
 def classify_color(score):
-    if score >= 9:
+    if score >= 11:
         return "green"
-    if score >= 6:
+    if score >= 7:
         return "yellow"
-    if score >= 3:
+    if score >= 4:
         return "orange"
     return "red"
 
@@ -411,44 +378,46 @@ def weather_label(weather_code, precipitation):
 
 
 def evaluate_beach(beach, skill_level):
+    marine = {"wave_height": None, "wave_direction": None, "wave_period": None}
+    forecast = {
+        "wind_speed": None,
+        "wind_direction": None,
+        "temperature_c": None,
+        "precipitation": None,
+        "weather_code": None,
+    }
+    has_marine_signal = False
+
     try:
         marine = get_marine_conditions(beach["lat"], beach["lon"])
         has_marine_signal = has_surf_marine_signal(marine)
-
-        if beach.get("source") == "osm" and not has_marine_signal:
-            forecast = {
-                "wind_speed": None,
-                "wind_direction": None,
-                "temperature_c": None,
-                "precipitation": None,
-                "weather_code": None,
-            }
-        else:
-            forecast = get_forecast_conditions(beach["lat"], beach["lon"])
     except Exception as exc:
-        print(f"Failed to fetch conditions for {beach['name']}: {exc}")
-        marine = {"wave_height": None, "wave_direction": None, "wave_period": None}
-        forecast = {
-            "wind_speed": None,
-            "wind_direction": None,
-            "temperature_c": None,
-            "precipitation": None,
-            "weather_code": None,
-        }
-        has_marine_signal = False
+        print(f"Failed to fetch marine conditions for {beach['name']}: {exc}")
+
+    should_fetch_forecast = not (is_dynamic_beach_source(beach.get("source")) and not has_marine_signal)
+    if should_fetch_forecast:
+        try:
+            forecast = get_forecast_conditions(beach["lat"], beach["lon"])
+        except Exception as exc:
+            print(f"Failed to fetch forecast conditions for {beach['name']}: {exc}")
 
     wave_score = wave_quality_score(marine["wave_height"], marine["wave_period"], skill_level)
+    swell_score = swell_quality_score(
+        marine["wave_direction"],
+        beach.get("preferred_swell_degrees"),
+    )
     wind_score = wind_quality_score(
         forecast["wind_speed"],
         forecast["wind_direction"],
         beach.get("best_wind_degrees", [0, 45, 90, 135, 180, 225, 270, 315]),
     )
-    total_score = wave_score + wind_score
+    total_score = wave_score + swell_score + wind_score
 
     return {
         "name": beach["name"],
         "region": beach.get("region", "Santa Catarina"),
         "source": beach.get("source", "local"),
+        "place_id": beach.get("place_id"),
         "lat": beach["lat"],
         "lon": beach["lon"],
         "distance_km": beach["distance_km"],
@@ -456,6 +425,7 @@ def evaluate_beach(beach, skill_level):
         "wave_direction": marine["wave_direction"],
         "wave_direction_visual": degrees_to_cardinal_arrow(marine["wave_direction"]),
         "wave_period": marine["wave_period"],
+        "preferred_swell_label": beach.get("preferred_swell_label", "Any"),
         "wind_speed": forecast["wind_speed"],
         "wind_direction": forecast["wind_direction"],
         "wind_direction_visual": degrees_to_cardinal_arrow(forecast["wind_direction"]),
@@ -466,6 +436,7 @@ def evaluate_beach(beach, skill_level):
         "best_wind_label": beach.get("best_wind_label", "Any"),
         "notes": beach.get("notes", "Surf spot in Santa Catarina"),
         "wave_score": wave_score,
+        "swell_score": swell_score,
         "wind_score": wind_score,
         "score": total_score,
         "has_marine_signal": has_marine_signal,
@@ -484,8 +455,41 @@ def parse_optional_float(value):
         return None
 
 
+def clamp_radius_km(value):
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RADIUS_KM
+
+    return max(MIN_RADIUS_KM, min(numeric, MAX_RADIUS_KM))
+
+
 def build_coordinate_label(lat, lon):
     return f"Current location ({lat:.4f}, {lon:.4f})"
+
+
+def build_beach_map_embed_url(beach):
+    api_key = get_google_maps_api_key()
+    place_id = beach.get("place_id")
+    if api_key and place_id:
+        return (
+            "https://www.google.com/maps/embed/v1/place"
+            f"?key={quote_plus(api_key)}&q={quote_plus(f'place_id:{place_id}')}&zoom=12"
+        )
+
+    return f"https://maps.google.com/maps?q=loc:{beach['lat']},{beach['lon']}&z=12&output=embed"
+
+
+def build_beach_google_maps_url(beach):
+    place_id = beach.get("place_id")
+    if place_id:
+        query = f"{beach['name']}, {beach.get('region', 'Brazil')}"
+        return (
+            "https://www.google.com/maps/search/?api=1"
+            f"&query={quote_plus(query)}&query_place_id={quote_plus(place_id)}"
+        )
+
+    return f"https://www.google.com/maps/search/?api=1&query={beach['lat']},{beach['lon']}"
 
 
 def resolve_origin(location_query, origin_lat, origin_lon, origin_source, resolved_location_label):
@@ -526,29 +530,14 @@ def find_candidate_beaches(origin, max_distance_km):
     if cached is not None:
         return cached
 
-    fallback_beaches = []
-    for beach in ALL_FALLBACK_BEACHES:
-        distance_km = haversine_km(origin["lat"], origin["lon"], beach["lat"], beach["lon"])
-        if distance_km <= max_distance_km:
-            beach_copy = beach.copy()
-            beach_copy["distance_km"] = round(distance_km, 1)
-            beach_copy.setdefault("source", "local")
-            fallback_beaches.append(beach_copy)
+    dynamic_beaches = location_service.find_nearby_beaches(origin["lat"], origin["lon"], max_distance_km)
 
-    if len(fallback_beaches) >= LOCAL_DISCOVERY_SUFFICIENT_RESULTS:
-        fallback_beaches.sort(key=lambda beach: (beach["distance_km"], beach["name"]))
-        beach_discovery_cache_set(cache_key, fallback_beaches)
-        return fallback_beaches
-
-    try:
-        dynamic_beaches = discover_beaches(origin["lat"], origin["lon"], max_distance_km)
-    except BeachDiscoveryError as exc:
-        print(f"Beach discovery fallback triggered: {exc}")
-        beach_discovery_cache_set(cache_key, fallback_beaches)
-        return fallback_beaches
+    if not dynamic_beaches:
+        beach_discovery_cache_set(cache_key, [])
+        return []
 
     combined = {}
-    for beach in [*dynamic_beaches, *fallback_beaches]:
+    for beach in dynamic_beaches:
         distance_km = haversine_km(origin["lat"], origin["lon"], beach["lat"], beach["lon"])
         if distance_km > max_distance_km:
             continue
@@ -556,7 +545,7 @@ def find_candidate_beaches(origin, max_distance_km):
         beach_copy = beach.copy()
         beach_copy["distance_km"] = round(distance_km, 1)
         beach_copy.setdefault("source", "local")
-        beach_key = beach_copy["name"].casefold()
+        beach_key = canonical_beach_name(beach_copy["name"])
         existing = combined.get(beach_key)
 
         if existing is None or beach_copy["distance_km"] < existing["distance_km"]:
@@ -608,12 +597,12 @@ def build_beach_rankings(origin, max_distance_km, result_limit, skill_level):
                 beach = futures[future]
                 print(f"Unexpected error evaluating {beach['name']}: {exc}")
 
-    local_results = [item for item in results if item.get("source", "local") != "osm"]
-    osm_results = [
+    local_results = [item for item in results if not is_dynamic_beach_source(item.get("source", "local"))]
+    dynamic_results = [
         item for item in results
-        if item.get("source") == "osm" and item.get("has_marine_signal", False)
+        if is_dynamic_beach_source(item.get("source")) and item.get("has_marine_signal", False)
     ]
-    results = local_results + osm_results
+    results = local_results + dynamic_results
 
     results.sort(
         key=lambda item: (
@@ -652,9 +641,25 @@ def build_rankings_with_radius_fallback(origin, max_distance_km, result_limit, s
     return origin_result, beaches, attempted_radius, None
 
 
+@app.route("/api/location-autocomplete")
+def location_autocomplete():
+    query = (request.args.get("q") or "").strip()
+    if len(query) < 2:
+        return jsonify({"suggestions": []})
+
+    try:
+        suggestions = location_service.autocomplete_places(query)
+    except LocationServiceError as exc:
+        return jsonify({"error": str(exc), "suggestions": []}), 502
+
+    return jsonify({"suggestions": suggestions[:6]})
+
+
 @app.route("/api/reverse-geocode", methods=["POST"])
 def reverse_geocode():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = request.form.to_dict() if request.form else {}
     lat = parse_optional_float(payload.get("lat"))
     lon = parse_optional_float(payload.get("lon"))
 
@@ -685,11 +690,13 @@ def home():
     error_message = None
     info_message = None
     has_searched = False
+    winner_map_embed_url = None
+    winner_google_maps_url = None
 
     if request.method == "POST":
         has_searched = True
         location_query = request.form.get("location_query", "").strip()
-        max_distance_km = int(request.form.get("max_distance_km", DEFAULT_RADIUS_KM))
+        max_distance_km = clamp_radius_km(request.form.get("max_distance_km", DEFAULT_RADIUS_KM))
         result_limit = int(request.form.get("result_limit", 5))
         skill_level = request.form.get("skill_level", "beginner")
         origin_lat = request.form.get("origin_lat", "").strip()
@@ -715,9 +722,15 @@ def home():
                 )
                 location_query = location_query or origin["name"]
                 resolved_location_label = origin["name"]
+            except LocationServiceError as exc:
+                error_message = str(exc)
             except Exception as exc:
                 print(f"Application error: {exc}")
                 error_message = "We could not load surf conditions right now. Please try again."
+
+    if beaches:
+        winner_map_embed_url = build_beach_map_embed_url(beaches[0])
+        winner_google_maps_url = build_beach_google_maps_url(beaches[0])
 
     return render_template(
         "index.html",
@@ -734,7 +747,8 @@ def home():
         origin_lon=origin_lon,
         origin_source=origin_source,
         resolved_location_label=resolved_location_label,
-        search_suggestions=SEARCH_SUGGESTIONS,
+        winner_map_embed_url=winner_map_embed_url,
+        winner_google_maps_url=winner_google_maps_url,
     )
 
 

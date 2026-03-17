@@ -4,7 +4,8 @@
 O SurfSpot Finder e uma aplicacao web em Flask que recomenda praias de surf a partir de uma origem escolhida pelo usuario. A aplicacao usa:
 - frontend HTML/Jinja em [`templates/index.html`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/templates/index.html);
 - backend Flask em [`app.py`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/app.py);
-- descoberta dinamica de praias em [`beach_source.py`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/beach_source.py), com fallback local em [`beaches_sc.py`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/beaches_sc.py) e [`beaches_rs.py`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/beaches_rs.py);
+- descoberta dinamica de praias via Google Places na camada [`mcp_server/`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/mcp_server);
+- metadata leve de surf em [`surf_metadata.py`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/surf_metadata.py) para enriquecer o ranking com swell preferido em spots conhecidos;
 - camada de integracao Google e MCP em [`mcp_server/`](/Users/camilagoulartlima/Documents/surfspot-finder/Demo/mcp_server).
 
 ## Componentes principais
@@ -19,28 +20,35 @@ Responsavel por:
 ### 2. Template web
 Responsavel por:
 - receber digitacao livre de localizacao;
+- consultar autocomplete de localizacao em tempo real via endpoint interno;
 - acionar `Use my location`;
 - chamar o endpoint interno de reverse geocoding;
 - disparar a busca automaticamente quando a geolocalizacao for obtida.
 
 ### 3. Descoberta de praias
 Responsavel por:
-- buscar praias em torno da origem e do raio escolhido usando OpenStreetMap via Overpass;
-- normalizar nome, regiao, coordenadas e notas basicas de cada praia encontrada;
-- usar datasets locais de SC e RS como fallback quando a descoberta externa falha ou quando o fallback ja cobre bem a busca.
+- buscar praias em torno da origem e do raio escolhido usando Google Places Nearby Search;
+- normalizar nome, regiao, coordenadas e notas basicas de cada praia encontrada.
 
-### 4. Integracoes externas
+### 4. Metadata de surf
+Responsavel por:
+- aplicar heuristicas de identidade para nomes equivalentes de praia;
+- anexar metadata local de swell preferido para spots conhecidos;
+- influenciar o ranking quando a direcao do swell combina com o spot.
+
+### 5. Integracoes externas
 - Google Geocoding API:
   - geocode de endereco digitado;
   - reverse geocode de latitude/longitude do navegador.
-- Overpass API:
+- Google Places API:
   - descoberta de praias proximas a partir de coordenadas e raio.
+  - autocomplete de locais digitados no campo de busca.
 - Open-Meteo Marine API:
   - altura, periodo e direcao de onda.
 - Open-Meteo Forecast API:
   - vento, temperatura, precipitacao e weather code.
 
-### 5. MCP server
+### 6. MCP server
 Responsavel por:
 - encapsular integracoes com Google;
 - expor ferramentas reutilizaveis para geocoding;
@@ -68,11 +76,13 @@ Responsavel por:
 - Service layer: resolve localizacao externa e normaliza payloads.
 - Domain logic: calcula distancia, pontuacao e ordenacao.
 - External providers: Google e Open-Meteo.
+- A busca dinamica do Google Places usa um raio maximo de 50 km por chamada, e a interface respeita esse limite.
 
 ## Configuracao e segredos
-- `GOOGLE_MAPS_API_KEY`: chave principal da Google Geocoding API.
+- `GOOGLE_MAPS_API_KEY`: chave principal usada por Google Geocoding e Google Places.
 - `GOOGLE_GEOCODING_BASE_URL`: override opcional para testes e mocks.
-- `OVERPASS_API_URL`: endpoint opcional para descoberta dinamica de praias.
+- `GOOGLE_PLACES_NEARBY_BASE_URL`: override opcional do endpoint `places:searchNearby`.
+- `GOOGLE_PLACES_AUTOCOMPLETE_BASE_URL`: override opcional do endpoint `places:autocomplete`.
 - As variaveis ficam fora do codigo, em `.env` local ou no ambiente de deploy.
 - O carregamento do `.env` e feito a partir da pasta `Demo`, evitando dependencia do diretorio atual do terminal.
 - Se a biblioteca `python-dotenv` nao estiver instalada, um loader interno assume a leitura do `.env`.
@@ -89,3 +99,4 @@ O sistema tambem persiste esses caches em disco dentro de `Demo/.cache/`, permit
 - o ranking avalia primeiro as praias mais proximas e limita quantos candidatos recebem chamadas externas;
 - spots dinamicos sem sinal util da Marine API nao consomem chamada adicional de forecast;
 - a concorrencia de avaliacao foi ampliada para acelerar o carregamento local.
+- as chamadas para Open-Meteo usam retry curto e timeouts menores para falhar mais rapido quando o provedor esta lento.

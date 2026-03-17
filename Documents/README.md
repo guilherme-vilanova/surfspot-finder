@@ -22,5 +22,5 @@ Esse formato reduz duplicacao, facilita onboarding e deixa claro qual arquivo at
 - Busca de praias de surf com base em uma origem informada pelo usuario.
 - Origem por texto livre ou por geolocalizacao atual do navegador.
 - Resolucao de endereco via Google Geocoding.
-- Ranking de praias usando dataset local e dados de mar/clima da Open-Meteo.
+- Ranking de praias usando Google Places e dados de mar/clima da Open-Meteo.
 - MCP server preparado para centralizar integracoes externas.
