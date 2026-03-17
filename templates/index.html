@@ -1422,9 +1422,6 @@ tr:hover{
           <select id="max-distance" name="max_distance_km">
             <option value="30" {% if max_distance_km == 30 %}selected{% endif %}>30 km</option>
             <option value="50" {% if max_distance_km == 50 %}selected{% endif %}>50 km</option>
-            <option value="120" {% if max_distance_km == 120 %}selected{% endif %}>120 km</option>
-            <option value="160" {% if max_distance_km == 160 %}selected{% endif %}>160 km</option>
-            <option value="220" {% if max_distance_km == 220 %}selected{% endif %}>220 km</option>
           </select>
         </div>
 
@@ -1502,7 +1499,7 @@ tr:hover{
 
           <div class="top-score">
             <div class="top-score-stars" aria-hidden="true">
-              {% set top_star_count = ((beaches[0].score / 11) * 5)|round(0, 'ceil')|int if beaches[0].score > 0 else 0 %}
+              {% set top_star_count = ((beaches[0].score / 14) * 5)|round(0, 'ceil')|int if beaches[0].score > 0 else 0 %}
               {% for _ in range(top_star_count) %}
               <span class="top-score-star filled">&#9733;</span>
               {% endfor %}
@@ -1581,11 +1578,11 @@ tr:hover{
             title="Map for {{ beaches[0].name }}"
             loading="lazy"
             referrerpolicy="no-referrer-when-downgrade"
-            src="https://maps.google.com/maps?q=loc:{{ beaches[0].lat }},{{ beaches[0].lon }}&z=12&output=embed">
+            src="{{ winner_map_embed_url }}">
           </iframe>
           <a
             class="map-link-btn"
-            href="https://www.google.com/maps/search/?api=1&query={{ beaches[0].lat }},{{ beaches[0].lon }}"
+            href="{{ winner_google_maps_url }}"
             target="_blank"
             rel="noopener noreferrer">
             Open in Google Maps
@@ -1601,7 +1598,7 @@ tr:hover{
       <div class="table-head">
         <div>
           <h3>Ranked Beaches</h3>
-          <p>Sorted by overall surf score, then wave score, wind score and distance.</p>
+          <p>Sorted by overall surf score, then wave score, swell fit, wind score and distance.</p>
           <div class="score-guide">
             <span class="score-guide-item"><span class="score-guide-stars">&#9733;</span> Difficult</span>
             <span class="score-guide-item"><span class="score-guide-stars">&#9733;&#9733;</span> Limited</span>
@@ -1666,7 +1663,7 @@ tr:hover{
                 <span class="score-tooltip">
                   <div class="score-inline">
                     <div class="score-stars" aria-hidden="true">
-                      {% set star_count = ((beach.score / 11) * 5)|round(0, 'ceil')|int if beach.score > 0 else 0 %}
+                      {% set star_count = ((beach.score / 14) * 5)|round(0, 'ceil')|int if beach.score > 0 else 0 %}
                       {% for _ in range(star_count) %}
                       <span class="score-star filled">&#9733;</span>
                       {% endfor %}
@@ -1677,6 +1674,7 @@ tr:hover{
                   </div>
                   <span class="tooltip-box">
                     Wave Score: {{ beach.wave_score }}<br>
+                    Swell Score: {{ beach.swell_score }}<br>
                     Wind Score: {{ beach.wind_score }}
                   </span>
                 </span>
@@ -1696,7 +1694,7 @@ tr:hover{
     {% elif has_searched %}
     <div class="empty-state">
       <h3>No Beaches Found</h3>
-      <p>Try a larger radius like 120 km or 160 km, or search from another location.</p>
+      <p>Try the 50 km radius or search from another location.</p>
     </div>
     {% endif %}
   </div>
@@ -1719,9 +1717,10 @@ const usUnitsButton = document.getElementById("us-units-btn");
 const skillLevelInfoButton = document.getElementById("skill-level-info-btn");
 const skillLevelHelp = document.getElementById("skill-level-help");
 const autocompletePanel = document.getElementById("location-autocomplete");
-const searchSuggestions = {{ search_suggestions|tojson }};
 let activeSuggestionIndex = -1;
 let filteredSuggestions = [];
+let autocompleteRequestTimer = null;
+let activeAutocompleteController = null;
 
 function clearResolvedOrigin() {
   originLatInput.value = "";
@@ -1833,21 +1832,54 @@ function renderAutocomplete() {
 
 function updateAutocomplete() {
   clearResolvedOrigin();
+  setStatus("");
 
-  const query = locationInput.value.trim().toLowerCase();
+  const query = locationInput.value.trim();
   if (query.length < 2) {
+    if (autocompleteRequestTimer) {
+      window.clearTimeout(autocompleteRequestTimer);
+      autocompleteRequestTimer = null;
+    }
+    if (activeAutocompleteController) {
+      activeAutocompleteController.abort();
+      activeAutocompleteController = null;
+    }
     closeAutocomplete();
     return;
   }
 
-  filteredSuggestions = searchSuggestions
-    .filter((suggestion) => {
-      return suggestion.label.toLowerCase().includes(query) || suggestion.value.toLowerCase().includes(query);
-    })
-    .slice(0, 6);
+  if (autocompleteRequestTimer) {
+    window.clearTimeout(autocompleteRequestTimer);
+  }
 
-  activeSuggestionIndex = filteredSuggestions.length ? 0 : -1;
-  renderAutocomplete();
+  autocompleteRequestTimer = window.setTimeout(async () => {
+    if (activeAutocompleteController) {
+      activeAutocompleteController.abort();
+    }
+
+    activeAutocompleteController = new AbortController();
+
+    try {
+      const response = await fetch(`/api/location-autocomplete?q=${encodeURIComponent(query)}`, {
+        signal: activeAutocompleteController.signal,
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Google Places autocomplete failed.");
+      }
+      filteredSuggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+      activeSuggestionIndex = filteredSuggestions.length ? 0 : -1;
+      renderAutocomplete();
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        filteredSuggestions = [];
+        closeAutocomplete();
+        setStatus(error.message || "Autocomplete is unavailable right now.", true);
+      }
+    } finally {
+      activeAutocompleteController = null;
+    }
+  }, 180);
 }
 
 locationInput.addEventListener("input", updateAutocomplete);

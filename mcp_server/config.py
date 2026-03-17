@@ -23,3 +23,17 @@ def get_google_geocoding_base_url():
         "GOOGLE_GEOCODING_BASE_URL",
         "https://maps.googleapis.com/maps/api/geocode/json",
     ).strip()
+
+
+def get_google_places_nearby_base_url():
+    return os.environ.get(
+        "GOOGLE_PLACES_NEARBY_BASE_URL",
+        "https://places.googleapis.com/v1/places:searchNearby",
+    ).strip()
+
+
+def get_google_places_autocomplete_base_url():
+    return os.environ.get(
+        "GOOGLE_PLACES_AUTOCOMPLETE_BASE_URL",
+        "https://places.googleapis.com/v1/places:autocomplete",
+    ).strip()

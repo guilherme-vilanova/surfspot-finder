@@ -20,11 +20,12 @@ Permitir que uma pessoa encontre rapidamente praias de surf proximas e bem avali
 ## Comportamentos de interface
 - A origem nao depende mais de uma lista fixa.
 - O conjunto de praias pode ser descoberto dinamicamente ao redor da origem e do raio escolhidos.
+- A descoberta dinamica usa Google Places como fonte principal para achar praias proximas.
 - A descoberta dinamica prioriza praias com perfil mais costeiro e reduz resultados de lago, rio e canal quando a intencao e surf.
 - Spots dinamicos sem leitura util de ondas na Marine API deixam de aparecer no ranking final.
 - Leituras muito fracas de onda tambem sao descartadas para reduzir praias nao surfaveis de agua interna.
 - O campo de localizacao aceita texto livre.
-- O campo de localizacao oferece autocomplete inline com contexto completo, como cidade, estado e pais.
+- O campo de localizacao oferece autocomplete inline baseado em resultados do Google Places.
 - A interface permite alternar unidades entre `Metric / Universal` e `American` para distancia, onda, vento e temperatura.
 - O campo `Surfer Level` oferece um botao informativo explicando os perfis e como eles influenciam o ranking.
 - A interface mostra o local resolvido no resumo da busca.
@@ -64,6 +65,7 @@ Permitir que uma pessoa encontre rapidamente praias de surf proximas e bem avali
 - No `Waves`, destaca onda, periodo e direcao do swell.
 - No `Weather`, destaca temperatura, clima com icone, vento e direcao do vento com seta.
 - Mostra um quadro lateral com mapa da praia vencedora em um zoom mais distante para dar contexto geografico.
+- Quando a praia vencedora vem do Google Places, o mapa lateral usa o identificador exato do lugar para reduzir ambiguidade no pin.
 - Mostra o score com estrelas de 0 a 5 no ranking, incluindo estrelas vazias para indicar progresso visual, sem exibir o numero bruto.
 - Mostra legenda da escala de estrelas no topo do ranking com leitura orientada a surf, como `Difficult`, `Limited`, `Surfable`, `Good Window` e `Worth It`.
 - Mostra cards laterais com metricas e chips de leitura.
@@ -81,5 +83,6 @@ Permitir que uma pessoa encontre rapidamente praias de surf proximas e bem avali
 - leitura mais rapida das condicoes principais antes de entrar na tabela.
 
 ## Limitacoes de UX atuais
-- ainda nao existe autocomplete de localizacao;
-- a descoberta dinamica depende de conectividade com Overpass e pode variar conforme a cobertura do OpenStreetMap.
+- o autocomplete de localizacao depende da resposta em tempo real do Google Places;
+- a descoberta dinamica depende de conectividade com Google Places;
+- o Google Nearby Search trabalha com raio maximo de 50 km por chamada, entao o seletor de raio foi limitado a esse teto.
